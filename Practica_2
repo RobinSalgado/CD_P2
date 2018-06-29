@@ -1,0 +1,85 @@
+%% Practica #1
+%% Paso 1
+close all; clc; clear all;
+fs = 96e3;
+mp = 16;
+Amp=1;
+f=5000;
+T=1;
+t=0:1/fs:T;
+y=sin(2*pi*f*t);
+stem(t(1:100),y(1:100));
+soundsc(y,fs);
+
+%% Paso 2
+%%%a) impulso conformado por un segundo de 0 1 0 
+Pulse = zeros(1,2*fs+1)
+Pulse(fs) = 1;
+soundsc(Pulse,fs);
+
+%% Paso 3
+Ruido = randn(1,5*fs);
+pwelch(Ruido,[],[],[],fs,'power');
+%%soundsc(Ruido,fs);
+%% Genere una señal “chirp” (-1 volt a 1 volt) de frecuencias 500:500:20000. 
+%%Basándose en el siguiente ejemplo:        
+t=0:1/fs:2;                          
+y=chirp(t,500,2,20e3);    
+pwelch(y,[],[],[],fs,'power');
+
+soundsc(y,fs);
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Parte #2 
+clear all; clc; close all;
+%%% Suponga D = 10 y fs = 8192 
+B = 0.5;
+mp = 12;
+Fs=8192;    %%Frecuencia de muestreo
+Rb = 2*500/(1+B);    %%bit Rate
+Rb = (Fs/mp);
+E=1/Rb;      %%Energia
+D=10;       %%D = duración del pulso como número de intervalos de símbolo
+Tp=1/Rb;    %%Periodo de bit
+Ts=1/Fs;    %%intervalo de muestreo
+type='rc';
+[Prc t]=rcpulse(B,D,Tp,Ts,type,E);
+
+%% b) BIPOLAR NRZ AMI
+lena = imread('lena512.bmp');
+lenarec=lena(252:283,319:350);
+
+b = de2bi(lenarec,8,'left-msb');
+b = b';
+bits = b(:);
+b = cast(bits,'double');        %cast para poder usar el vector bits
+%%
+b = bits;
+B = 0.5;
+pulse=-1;
+for count = 1:numel(b)
+    if b(count)==1
+        if pulse==-1
+            pulse = 1;
+            b(count)= -1;
+        else
+            pulse = -1;
+            b(count)= 1;
+        end
+    end
+end
+
+    s = zeros(1,numel(b)*mp);
+    s(1:mp:end) = b;
+    LENA_AMI= conv(s,Prc);                           %%Signal Pulse Train
+
+header = 'Lena 32 x 32';
+
+LENA_AMI = [dec2bin(85) header ]
+
+%% LENA
+%%bits = [header bitslena]
+%%    = [85d headerlena bitslena]
