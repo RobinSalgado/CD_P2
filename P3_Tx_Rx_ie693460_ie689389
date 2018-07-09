@@ -1,0 +1,138 @@
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Transmicion TX %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Diseñamos un filtro de coseno elevado con 5 khz de ancho de banda
+BW=8e3;
+B=0.22;
+D=10;
+Rb=(2*BW/(1+B)); %% bandwidth 5kHz
+Fs=48000;
+Ts=1/Fs;
+mpbits = round(Fs/Rb);
+Rb=Fs/mpbits;
+Tp=1/Rb;
+E=Tp;
+type='srrc';
+[p t]=rcpulse(B,D,Tp,Ts,type,E);
+%% Captura de la lena con su header
+load lena512.mat
+lenarec=lena512;
+b=de2bi(lenarec,8);
+b=b';
+bits=b(:);
+G=bits';
+header=[1,0,0,0,0,0,0,1];
+G=[header,G];
+% imshow(uint8(lenarec))
+%% creamos nuestro codigo de linea Polar NRZ
+G(G==0) = -1; % L
+s = zeros(1,numel(G)*mpbits);
+s(1:mpbits:end) = G;
+%% Tren de pulsos con potencia unitaria
+YTLena = conv(s,p);
+PYTLena=(1/numel(YTLena))*sum(YTLena.*YTLena);
+YTLena=YTLena./sqrt(PYTLena);
+%% modulacion am E INDICE DE MODULACION de la primera señal
+Fc = 9e3;
+CARRAMP=max(abs(YTLena));
+samLCImagen = ammod(YTLena,Fc,Fs,0,CARRAMP);
+mlena = (max(samLCImagen)-CARRAMP)/CARRAMP;% indice de modulacion de la imagen
+%% Before Transmision we normalize the signal [1 -1]
+samLCImagen=samLCImagen/max(abs(samLCImagen));
+%% Transmicion
+soundsc([zeros(1,Fs),samLCImagen],Fs,16);
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% recepcion RX %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% inicia la recepción
+Fs=48e3;
+samples=16;
+recObj=audiorecorder(Fs,samples,1);
+disp('Grabando');
+record(recObj);
+%% para la recepción
+stop(recObj);
+disp('Fin de la grabacion');
+%% recuperacion de los datos
+mydata=getaudiodata(recObj);
+%% Quitar silecion encontrando el header
+Rx = find(abs(mydata)>0.01);
+Fmydata=mydata(Rx(1):Rx(end));
+%% Filtrado de señal de imagen
+Bw3 = 20;
+Bw4 = 17e3;
+Fs = 48e3;
+fn = Fs/2; %Ancho de banda.
+o=99;
+fc3 = Bw3/fn; % Frecuencia de corte de 9.5khz
+fc4 = Bw4/fn; % Frecuencia de corte de 15khz
+f2=[0 0.0005 0.0006 0.0007 0.0008 fc3 fc4 0.71 0.72 0.73 0.74 1];
+m2=[0 0 0 0 1 1 1 1 0 0 0 0];
+BPF2 = fir2(o,f2,m2);
+Imagen = conv(BPF2,Fmydata);
+%% Imagen
+sdamLCI=abs(hilbert(Imagen));
+sdamLCI=sdamLCI-mean(sdamLCI);
+%% Sincronizacion y decodificacion
+%% Aplicacion del filtro MATCH
+BW=8e3;
+B=0.22;
+D=10;
+Rb=(2*BW/(1+B)); %% bandwidth 5kHz
+Fs=48000;
+Ts=1/Fs;
+mpbits = round(Fs/Rb);
+Rb=Fs/mpbits;
+Tp=1/Rb;
+E=Tp; 
+type='srrc';
+[p t]=rcpulse(B,D,Tp,Ts,type,E);
+% DataAudio=conv(p,sdamLCA);
+DataImagen=conv(p,sdamLCI);
+%% Diagrama de ojo de la señal de audio e imagn recibida
+eyediagram(DataImagen(1:10000),mpbits*3);
+%% Normalizamos las señales
+PYTImRx=(1/numel(DataImagen))*sum(DataImagen.*DataImagen);
+DataImagen=DataImagen./PYTImRx;
+DataImagen=DataImagen/max(abs(DataImagen));
+%% Metodo de CLuster Variance para 100 simbolos en la imagen
+Srrcdelay=(numel(p)/2)*2;
+FilterDelay=round(o/2);
+DataImagen=DataImagen((Srrcdelay+FilterDelay):end- (Srrcdelay+FilterDelay));
+window=50*mpbits;
+ConIndex = 1;
+ConvBits = [];
+Star = Rb;
+
+while ConIndex + Star - 1 <= numel(DataImagen)  
+    sync = DataImagen(ConIndex : ConIndex + window - 1);
+    Cuanti = zeros(1,numel(sync));
+    Cuanti(sync >= 0)= 1;
+    Cuanti(sync < 0)= -1;
+    sync = reshape(sync,[mpbits,window/mpbits]); 
+    Cuanti = reshape(Cuanti,[mpbits,window/mpbits]); 
+    % cluster variance
+    cv = var(Cuanti - sync,0, 2);
+    Index = find(cv==min(cv));
+    %Decodificacion
+    if(ConIndex + Star - 1 > numel(DataImagen))
+       xtmp = DataImagen(ConIndex + Index - 1:mpbits:end);
+       ConvBits = [ConvBits;xtmp]; 
+    else
+        xtmp = DataImagen(ConIndex + Index - 1:mpbits:ConIndex + Star - 1 + Index -1);
+        ConvBits = [ConvBits;xtmp];   
+        ConIndex = ConIndex + Star + Index-1;
+    end
+end
+%% quitar el header de la imagen
+ConvBits(ConvBits>0)=1;
+ConvBits(ConvBits<0)=0;
+% Header=ConvBits(1:8)'
+%% Reconstruccion
+DataVec=vec2mat(ConvBits(9:end),8);
+DataVec=bi2de(DataVec);
+DataVec=vec2mat(DataVec,512);
+DataVec=DataVec';
+imshow(uint8(DataVec));
