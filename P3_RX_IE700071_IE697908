@@ -1,0 +1,350 @@
+%% Daniel Velazquez Dominguez
+%  Alexis Guillermo Andalon Chavez
+%  
+%  ITESO - 23/11/17
+%  Sistemas de Comunicaciones Digitales
+%
+%  Practica 3 - RX
+%% Leer senal recibida y eliminar silencios.
+
+% Limpiar variables y command window.
+clear; close all;
+
+% Grabar senal que se recibe del transmisor.
+% recorded_audio = audiorecorder(48000,16,1);
+% record(recorded_audio);
+% pause(200);
+% data = getaudiodata(recorded_audio,'double');
+% audiowrite('P4_Data.wav',data,48000);
+% pause(10);
+
+% Leer archivos de audio que contienen los bits (previamente grabados).
+[Y_RX_Mod,Fs] = audioread('P4_Data.wav');
+
+%  Para eliminar los silencios de la senal, se obtiene un valor mayor a 0.01
+%  para la funcion find, que despues se le recorta a la senal.
+No_Silences = find(abs(Y_RX_Mod) > 0.01);
+Y_RX_Mod = Y_RX_Mod((No_Silences(1,1) - 10):(No_Silences(end,1) + 10));
+
+%% Espectro de frecuencia de la senal recibida.
+
+% Tamano de FFT (potencia de 2).
+NN = 512;
+% Crear estimador espectral Welch.
+h = spectrum.welch;
+
+% Espectro de potencia de la senal recibida.
+figure,
+RC_Tx_Plot = plot(psd(h,Y_RX_Mod(1:Fs*5),'Fs',Fs,'NFFT',NN));
+set(RC_Tx_Plot(1), 'LineWidth', 2);
+title('Espectro de potencia de la senal recibida (modulada)');
+
+%% Filtrar senal con filtros pasabandas.
+
+% Ancho de banda para la imagen.
+B_img = 14400;
+% Frecuencia de la portadora de la imagen.
+Fp_img = 7500;
+% Orden del filtro.
+O_img = 100;
+% Crear filtro.
+f_img = fir1(O_img,[(Fp_img-B_img/2), (Fp_img+B_img/2)]/(Fs/2));
+
+% Ancho de banda para el audio.
+B_aud = 4800;
+% Frecuencia de la portadora de la imagen.
+Fp_aud = 17500;
+% Orden del filtro.
+O_aud = 100;
+% Crear filtro.
+f_aud = fir2(O_aud, [0, (Fp_aud-B_aud/2)*2/Fs, (Fp_aud-B_aud/2)*2/Fs, ... 
+                    (Fp_aud+B_aud/2)*2/Fs, (Fp_aud+B_aud/2)*2/Fs, 1],  ...
+                    [0, 0, 1, 1, 0, 0]);
+
+% Respuesta en frecuencia de los filtros.
+figure,
+freqz(f_img,1);
+hold on
+freqz(f_aud,1);
+
+% Aplicar filtros y recortar retardos.
+Y_RX_Mod_img = conv(Y_RX_Mod,f_img);
+Y_RX_Mod_img = Y_RX_Mod_img(O_img/2:(end-O_img/2));
+Y_RX_Mod_aud = conv(Y_RX_Mod,f_aud);
+Y_RX_Mod_aud = Y_RX_Mod_aud(O_aud/2:(end-O_aud/2));
+Y_RX_Mod_aud = Y_RX_Mod_aud(1:589330*12);
+
+%% Espectros de senales filtradas.
+
+% Espectro de potencia de banda de la imagen.
+figure,
+RC_Tx_Plot = plot(psd(h,Y_RX_Mod_img(1:Fs*5),'Fs',Fs,'NFFT',NN));
+set(RC_Tx_Plot(1), 'LineWidth', 2);
+title('Espectro de potencia de senal filtrada (banda de la imagen)');
+
+% Espectro de potencia de banda del audio.
+figure,
+RC_Tx_Plot = plot(psd(h,Y_RX_Mod_aud(1:Fs*5),'Fs',Fs,'NFFT',NN));
+set(RC_Tx_Plot(1), 'LineWidth', 2);
+title('Espectro de potencia de senal filtrada (banda del audio)');
+
+%% Demodular senales con transformada de Hilbert.
+
+% Demodulacion de senales.
+Y_RX_img = abs(hilbert(Y_RX_Mod_img));
+Y_RX_aud = abs(hilbert(Y_RX_Mod_aud));
+
+% Eliminar componente de directa.
+Y_RX_img = Y_RX_img - mean(Y_RX_img);
+Y_RX_aud = Y_RX_aud - mean(Y_RX_aud);
+
+% Normalizar senales resultantes.
+Y_RX_img = (Y_RX_img / max(abs(Y_RX_img)));
+Y_RX_aud = (Y_RX_aud / max(abs(Y_RX_aud)));
+
+% Quitar cosas.
+Y_RX_img = Y_RX_img(22:end-22);
+Y_RX_aud = Y_RX_aud(22:end-22);
+
+%% Crear pulso SRRC para el Match Filter - Imagen
+
+% Frecuencia y periodo de muestreo.
+Fs_img = Fs;     Ts_img = 1/Fs_img;
+% Duracion del pulso (numero de intervalos del simbolo).
+D_img = 10;
+% Beta.
+r_img = 0.2;
+% Ancho de banda.
+B_img = 14400/2;
+% Tasa de bits.
+Rb_img = 2*B_img / (1+r_img);
+% Intervalo de muestreo.
+Tp_img = 1/Rb_img;
+% Ancho de banda de 6dB.
+f0_img = Rb_img/2;
+% Numero de muestras.
+mp_img = Tp_img/Ts_img;
+% Energia del pulso.
+energy_img = Tp_img;
+
+% Creando el Match Filter con potencia unitaria.
+[p_SRRC_img,t_SRRC_img] = rcpulse(r_img,D_img,Tp_img,Ts_img,'srrc',energy_img);
+
+%% Crear pulso SRRC para el Match Filter - Audio
+
+% Frecuencia y periodo de muestreo.
+Fs_aud = Fs;     Ts_aud = 1/Fs_aud;
+% Duracion del pulso (numero de intervalos del simbolo).
+D_aud = 10;
+% Beta.
+r_aud = 0.2;
+% Ancho de banda.
+B_aud = 4800/2;
+% Tasa de bits.
+Rb_aud = 2*B_aud / (1+r_aud);
+% Intervalo de muestreo.
+Tp_aud = 1/Rb_aud;
+% Ancho de banda de 6dB.
+f0_aud = Rb_aud/2;
+% Numero de muestras.
+mp_aud = Tp_aud/Ts_aud;
+% Energia del pulso.
+energy_aud = Tp_aud;
+
+% Creando el Match Filter con potencia unitaria.
+[p_SRRC_aud,t_SRRC_aud] = rcpulse(r_aud,D_aud,Tp_aud,Ts_aud,'srrc',energy_aud);
+
+%% Aplicar Match Filter.
+
+% Aplicar filtros y recortar retardos.
+Y_RX_img_Match = conv(Y_RX_img,p_SRRC_img);
+Y_RX_img_Match = Y_RX_img_Match(numel(p_SRRC_img)/2:(end-numel(p_SRRC_img)/2));
+Y_RX_aud_Match = conv(Y_RX_aud,p_SRRC_aud);
+Y_RX_aud_Match = Y_RX_aud_Match(numel(p_SRRC_aud)/2:(end-numel(p_SRRC_aud)/2));
+
+% Normalizar senales despues de Match Filters.
+Y_RX_img_Match = (Y_RX_img_Match / max(abs(Y_RX_img_Match)));
+Y_RX_aud_Match = (Y_RX_aud_Match / max(abs(Y_RX_aud_Match)));
+
+%% Diagramas de ojo.
+
+% Diagrama de ojo para tren de pulsos recibidos de la imagen.
+eyediagram(Y_RX_img_Match(1:Fs*1),2*mp_img);
+grid on
+title('Eye Diagram - IMG')
+
+% Diagrama de ojo para tren de pulsos recibidos del audio.
+eyediagram(Y_RX_aud_Match(1:Fs*5),2*mp_aud);
+grid on
+title('Eye Diagram - AUD')
+
+%% Cluster Variance para sincronizacion y recuperar bits.
+
+% Umbral de decision para bits (en base a diagramas de ojo).
+Umbral = 0.37;
+% Simbolos por seccion.
+simbs_sec_IMG = 500 * mp_img;
+% Numero de simbolos del tren de pulsos en la imagen a tomar en cuenta.
+symbl_count_img = 100;
+% Vector para bits decodificados.
+Bits_Rec_img = [];
+% Delay para sincronia de la senal.
+delay = 0;
+
+% Cuentas para el for.
+for i = (1:floor(numel(Y_RX_img_Match)/simbs_sec_IMG))
+    
+    % La ultima seccion es mas grande.
+    if(i == (floor(numel(Y_RX_img_Match)/simbs_sec_IMG))) 
+        % Crear secciones para cluster variance.
+        current_section_img = Y_RX_img_Match(1+simbs_sec_IMG*(i-1)+delay:end);
+    else
+        % Crear secciones para cluster variance.
+        current_section_img = Y_RX_img_Match(1+simbs_sec_IMG*(i-1)+delay:simbs_sec_IMG*(i)+delay);
+    end
+    
+    % Crear matrices para valores del tren de pulsos del tamano correcto.
+    M_trn_img = reshape(abs(current_section_img(1:mp_img*symbl_count_img)),[mp_img,symbl_count_img]);
+    % Crear matrices para valores cuantizados.
+    M_qnt_img = M_trn_img;
+
+    % Asignar valores cuantizados.
+    M_qnt_img(M_qnt_img >= Umbral) = 1;     M_qnt_img(M_qnt_img < Umbral) = 0;
+
+    % Calcular Cluster Variance.
+    cv_img = var(M_qnt_img - M_trn_img, 0, 2);
+   
+    % Calcular puntos de inicio de muestreo.
+    [aux1, start_img] = min(cv_img);
+
+    % Aumentar delay.
+    if(start_img >= floor(mp_img/2)) 
+        delay = delay + start_img - floor(mp_img/2);
+    end
+    
+    % Muestrear la senal recibida en los puntos correctos.
+    Bits_Rec_img_2 = current_section_img(start_img:mp_img:end);
+    % Decidiendo valor binario de acuerdo al umbral de decision.
+    Bits_Rec_img_2 = abs(Bits_Rec_img_2);
+    Bits_Rec_img_2(Bits_Rec_img_2 >= Umbral) = 1;
+    Bits_Rec_img_2(Bits_Rec_img_2 <  Umbral) = 0;
+    % Vector de bits la misma dimension que el original.
+    Bits_Rec_img = [Bits_Rec_img,Bits_Rec_img_2'];
+end
+
+% Header a encontrar en los bits.
+Header_img  = [1 0 0 0 0 0 0 1];
+Hdr_pos_img = strfind(Bits_Rec_img,Header_img);
+
+% Recortar la imagen al tamano correcto.
+Bits_Rec_img = Bits_Rec_img(Hdr_pos_img(1):end);
+Bits_Rec_img = Bits_Rec_img(1:2097192);
+
+% ------------------------------------------------------------------------
+
+% Simbolos por seccion.
+simbs_sec_AUD = 500 * mp_aud;
+% Numero de simbolos del tren de pulsos en la imagen a tomar en cuenta.
+symbl_count_aud = 100;
+% Vector para bits decodificados.
+Bits_Rec_aud = [];
+% Delay para sincronia de la senal.
+delay = 0;
+
+% Cuentas para el for.
+for i = (1:floor(numel(Y_RX_aud_Match)/simbs_sec_AUD))
+    
+    % La ultima seccion es mas grande.
+    if(i == (floor(numel(Y_RX_aud_Match)/simbs_sec_AUD))) 
+        % Crear secciones para cluster variance.
+        current_section_aud = Y_RX_aud_Match(1+simbs_sec_AUD*(i-1)+delay:end);
+    else
+        % Crear secciones para cluster variance.
+        current_section_aud = Y_RX_aud_Match(1+simbs_sec_AUD*(i-1)+delay:simbs_sec_AUD*(i)+delay);
+    end
+    
+    % Crear matrices para valores del tren de pulsos del tamano correcto.
+    M_trn_aud = reshape(abs(current_section_aud(1:mp_aud*symbl_count_aud)),[mp_aud,symbl_count_aud]);
+    % Crear matrices para valores cuantizados.
+    M_qnt_aud = M_trn_aud;
+
+    % Asignar valores cuantizados.
+    M_qnt_aud(M_qnt_aud >= Umbral) = 1;     M_qnt_aud(M_qnt_aud < Umbral) = 0;
+
+    % Calcular Cluster Variance.
+    cv_aud = var(M_qnt_aud - M_trn_aud, 0, 2);
+   
+    % Calcular puntos de inicio de muestreo.
+    [aux1, start_aud] = min(cv_aud);
+
+    % Aumentar delay.
+    if(start_aud >= floor(mp_aud/2)) 
+        delay = delay + start_aud - floor(mp_aud/2);
+    end
+    
+    % Muestrear la senal recibida en los puntos correctos.
+    Bits_Rec_aud_2 = current_section_aud(start_aud:mp_aud:end);
+    % Decidiendo valor binario de acuerdo al umbral de decision.
+    Bits_Rec_aud_2 = abs(Bits_Rec_aud_2);
+    Bits_Rec_aud_2(Bits_Rec_aud_2 >= Umbral) = 1;
+    Bits_Rec_aud_2(Bits_Rec_aud_2 <  Umbral) = 0;
+    % Vector de bits la misma dimension que el original.
+    Bits_Rec_aud = [Bits_Rec_aud,Bits_Rec_aud_2'];
+end
+
+% Header a encontrar en los bits.
+Header_aud  = [1 0 0 0 0 0 0 1];
+Hdr_pos_aud = strfind(Bits_Rec_aud,Header_aud);
+
+% Recortar la imagen al tamano correcto.
+Bits_Rec_aud = Bits_Rec_aud(Hdr_pos_aud(1):end);
+Bits_Rec_aud = Bits_Rec_aud(1:589320);
+
+%% Recuperar bits de la imagen y el audio.
+
+% Bits por muestra de la imagen.
+Bits_sample_img = 8;
+
+% Extraer el header de los bits recibidos.
+Header_img = bi2de(Bits_Rec_img(1:8),'left-msb');
+Header_aud = bi2de(Bits_Rec_aud(1:8),'left-msb');
+
+% Extraer ancho y alto de la imagen.
+Height_img = bi2de(Bits_Rec_img(9:24),'left-msb');
+Width_img = bi2de(Bits_Rec_img(25:40),'left-msb');
+
+% ------------------------------------------------------------------------
+
+% Convertir bits de imagen a mat.
+M_bits_img = vec2mat(Bits_Rec_img(41:end),Bits_sample_img);
+% Convertir binario a decimal.
+M_final_img = bi2de(M_bits_img,'left-msb');
+% Reordenar matriz, convertir en enteros de 8 bits, y mostrar imagen.
+figure,
+imshow(uint8(reshape(M_final_img,[Height_img,Width_img])));
+title('Imagen Recuperada');
+
+% Escribir cadena de bits a archivo .opus.
+fileID = fopen('P4_Audio_Recuperado.opus','w');
+fwrite(fileID,Bits_Rec_aud(9:end)','ubit1');
+fclose(fileID);
+
+%% Bits con error.
+
+% Obtener bits de la imagen originales.
+load lena512.mat
+lena512_m = lena512(:);
+size_bits = 8;
+b_lena = de2bi(lena512_m,size_bits,'left-msb');
+b_lena = b_lena';
+Bits_original_img = b_lena(:);
+
+% Obtener bits del audio originales.
+fileID = fopen('spring_HiFi.opus');
+Bits_original_aud = fread(fileID,'ubit1');
+fclose(fileID);
+
+% Bits con error en la imagen.
+Error_bits_img = sum(xor(Bits_Rec_img(41:end)',Bits_original_img))
+% Bits con error en el audio.
+Error_bits_aud = sum(xor(Bits_Rec_aud(9:end)',Bits_original_aud))
