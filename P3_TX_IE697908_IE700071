@@ -1,0 +1,163 @@
+%% Daniel Velazquez Dominguez
+%  Alexis Guillermo Andalon Chavez
+%  
+%  ITESO - 01/11/17
+%  Sistemas de Comunicaciones Digitales
+%
+%  Practica 3 -  TX
+%% Obtener cadena de bits de la Lena con header incluido.
+
+% Limpiar variables y command window.
+clear; close all;
+
+% Cargar Lena en blanco y negro.
+%load lena512.mat
+pardi = double(imread('Pardinas_Comunicaciones.bmp'));
+% Recortar imagen.
+%lena512_m = lena512(:);
+lena512_m = pardi(:);
+% Crear header (inicio, mas el ancho y alto de la imagen).
+hd = [hex2dec('81'),hex2dec('2'),hex2dec('0'),hex2dec('2'),hex2dec('0')];
+% Concatenar el header.
+lena512_m = [hd, lena512_m'];
+
+% Cantidad de bits por dato de la imagen.
+size_bits = 8;
+% Convertir decimal de la imagen a binario.
+b_lena = de2bi(lena512_m,size_bits,'left-msb');
+% Transpuesta para cadena de bits.
+b_lena = b_lena';
+% Obtener todos los bits de la imagen.
+bits_image = b_lena(:);
+
+%% Obtener cadena de bits de la cancion con header incluido.
+
+% Leer archivo .opus de forma binaria.
+fileID = fopen('spring_HiFi.opus');
+bits_sound = fread(fileID,'ubit1');
+% Incluir header (0x81).
+bits_sound = [1;0;0;0;0;0;0;1;bits_sound];
+
+% Fs = 48000;
+% [sound,Fs_s] = audioread('spring_HiFi.wav',[1,1.8*Fs]);
+% Cantidad de bits por dato de la imagen.
+% size_bits = 8;
+% Cuantizar muestras a menos bits, para poder enviar mas tiempo de cancion
+% en el ancho de banda limitado.
+% swing = (2^size_bits-1) /2;
+% y_a = round(sound * swing + swing);
+% Incluir header junto con frecuencia de muestreo de la cancion.
+% hd = [hex2dec('81'),hex2dec('AC'),hex2dec('44'),y_a'];
+% Convertir decimal de la imagen a binario.
+% b = de2bi(hd,size_bits,'left-msb');
+% Transpuesta para cadena de bits. 
+% b = b';
+% Acomodar imagen en una sola cadena de bits.
+% bits_sound = b(:);
+
+%% Generacion de los pulsos SRRC y los trenes de pulsos
+
+% Frecuencia de la senal portadora.
+Fp_image = 7500;
+Fp_sound = 17500;
+% Frecuencia y periodo de muestreo.
+Fs = 48000;
+Ts = 1/Fs;
+% Duracion del pulso (numero de intervalos del simbolo).
+D = 10;
+% Beta.
+r = 0.2;
+% Ancho de banda
+B_image = 14400/2;
+B_sound = 4800/2;
+% Tasa de bits
+Rb_image = 2*B_image / (1+r);
+Rb_sound = 2*B_sound / (1+r);
+% Intervalo de muestreo.
+Tp_sound = 1/Rb_sound;
+Tp_image = 1/Rb_image;
+% Ancho de banda de 6dB:
+f0_sound = Rb_sound/2;
+f0_image = Rb_image/2;
+% Numero de muestras.
+mp_sound = Tp_sound/Ts;
+mp_image = Tp_image/Ts;
+% Creando los diferentes pulsos SRRC con energia unitaria.
+[p_sound,t_sound] = rcpulse(r,D,Tp_sound,Ts,'srrc',Tp_sound);
+[p_image,t_image] = rcpulse(r,D,Tp_image,Ts,'srrc',Tp_image);
+
+%% Crear trenes de pulsos con codigo de linea Bipolar NRZ (AMI).
+
+% Vector nuevo con los bits.
+s_sound = bits_sound;
+% Bandera para cambiar los bits.
+bandera_sound = 0;
+% Ciclo para obtener el tren de pulsos de la senal.
+for i = 1:numel(s_sound)
+   if(bits_sound(i) == 1)
+      if(bandera_sound == 1)
+          s_sound(i) = s_sound(i) * -1;
+      end
+       bandera_sound = ~bandera_sound;
+   end
+end
+
+% Vector nuevo con los bits.
+s_image = bits_image;
+% Bandera para cambiar los bits.
+bandera_image = 0;
+% Ciclo para obtener el tren de pulsos de la senal.
+for i = 1:numel(s_image)
+   if(bits_image(i) == 1)
+      if(bandera_image == 1)
+          s_image(i) = s_image(i) * -1;
+      end
+       bandera_image = ~bandera_image;
+   end
+end
+
+% Crear vector para modulador de impulsos.
+s_m_sound = zeros(1,(numel(s_sound)-1)*mp_sound+1);
+% Asignar el valor de los bits cada mp muestras.
+s_m_sound(1:mp_sound:end) = s_sound;
+
+% Crear vector para modulador de impulsos.
+s_m_image = zeros(1,(numel(s_image)-1)*mp_image+1);
+% Asignar el valor de los bits cada mp muestras.
+s_m_image(1:mp_image:end) = s_image;
+
+% Convolucion de la senal con el tren de pulsos y normalizacion.
+y_sound = conv(p_sound,s_m_sound);
+y_sound = y_sound/max(y_sound);
+
+% Convolucion de la senal con el tren de pulsos y normalizacion.
+y_image = conv(p_image,s_m_image);
+y_image = y_image/max(y_image);
+
+%% Modular trenes de pulsos a mandar.
+
+% Modulacion de las senales.
+sam_sound = ammod(y_sound,Fp_sound,Fs,0,max(y_sound)); 
+sam_image = ammod(y_image,Fp_image,Fs,0,max(y_image)); 
+
+% Combinar trenes de pulsos en uno solo.
+sam_tx = [sam_sound,zeros(1,numel(sam_image) - numel(sam_sound))] + sam_image;
+
+%% Transmitir senal.
+
+% Transmitir la senal modulada final con la imagen y el audio.
+pause
+soundsc(sam_tx,Fs);
+
+%% Obtener espectro de potencia de la senal transmitida.
+
+% Tamano de FFT (potencia de 2).
+NN = 512;
+% Crear estimador espectral Welch.
+h = spectrum.welch;
+
+% Espectro de potencia de senal transmitida.
+figure,
+RC_Tx_Plot = plot(psd(h,sam_tx(1:Fs*5),'Fs',Fs,'NFFT',NN));
+set(RC_Tx_Plot(1), 'LineWidth', 2) 
+title('Espectro de potencia de la senal transmitida')
